@@ -1,0 +1,15 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const context={document:{addEventListener(){}},esc:String,rows:events=>'rows:'+events.length};
+vm.createContext(context);
+vm.runInContext(fs.readFileSync('china-provinces.js','utf8'),context);
+vm.runInContext(fs.readFileSync('footprint-map.js','utf8'),context);
+const html=vm.runInContext("footprintMap([{city:'上海市',status:'attended'},{city:'上海',status:'attended'},{city:'杭州',status:'pending'},{city:'未知城市',status:'attended'}])",context);
+assert(html.includes('已点亮 1 座城市'));
+assert(html.includes('上海，2 场现场'));
+assert(!html.includes('data-map-city="杭州"'));
+assert(html.includes('未知城市'));
+assert(html.includes('北京市'));
+assert(html.includes('省级行政区底图'));
+assert(!html.includes('NaN'));
+assert(vm.runInContext('footprintMap([])',context).includes('点亮第一座城市'));
+console.log('Passed: attended-only, normalized cities, unknown cities, empty state.');

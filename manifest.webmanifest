@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "赴约 · 我的现场",
+  "short_name": "赴约",
+  "description": "记录为喜欢的艺人奔赴过的每一次现场",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0c0d10",
+  "theme_color": "#0c0d10",
+  "categories": ["lifestyle", "entertainment"],
+  "icons": [
+    {"src":"icons/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"icons/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any"},
+    {"src":"icons/icon-maskable-512.png","sizes":"512x512","type":"image/png","purpose":"maskable"}
+  ]
+}
