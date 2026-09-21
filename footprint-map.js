@@ -37,7 +37,7 @@ function footprintMap(events) {
   const dots = Object.entries(cityCoordinates).map(([city, coord]) => {
     const [x,y]=project(coord);
     if(x<20||x>700||y<20||y>600)return '';
-    if(!groups.has(city))return `<circle cx="${x}" cy="${y}" r="3" fill="#535767"/>`;
+    if(!groups.has(city))return '';
     const count=groups.get(city).length, chosen=city===activeMapCity;
     return `<g><circle cx="${x}" cy="${y}" r="${chosen?24:17}" fill="#d7fb83" opacity=".12"/><circle cx="${x}" cy="${y}" r="${chosen?13:10}" fill="none" stroke="#d7fb83" opacity=".65"/><circle cx="${x}" cy="${y}" r="5" fill="#d7fb83"/>${chosen?`<text x="${x-16}" y="${y-24}" text-anchor="end" fill="#f2f5e9" font-size="22" paint-order="stroke" stroke="#151a22" stroke-width="5">${esc(city)} · ${count} 场</text>`:''}<foreignObject x="${x-22}" y="${y-22}" width="44" height="44"><button xmlns="http://www.w3.org/1999/xhtml" class="map-hit" data-map-city="${esc(city)}" aria-label="${esc(city)}，${count} 场现场" aria-pressed="${chosen}"></button></foreignObject></g>`;
   }).join('');

@@ -17,6 +17,7 @@ assert(html.includes('未知城市'));
 assert(html.includes('北京市'));
 assert(html.includes('省级行政区底图'));
 assert(!html.includes('NaN'));
+assert(!html.includes('fill="#535767"'));
 assert(vm.runInContext("resolveCityName('浙江省嘉兴市')",context)==='嘉兴市');
 assert(vm.runInContext("resolveCityName('嘉兴')",context)==='嘉兴市');
 assert(vm.runInContext("resolveCityName('台北')",context)==='台北市');
