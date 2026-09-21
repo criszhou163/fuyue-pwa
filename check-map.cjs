@@ -3,9 +3,11 @@ const context={document:{addEventListener(){}},esc:String,rows:events=>'rows:'+e
 vm.createContext(context);
 vm.runInContext(fs.readFileSync('china-provinces.js','utf8'),context);
 vm.runInContext(fs.readFileSync('footprint-map.js','utf8'),context);
-const html=vm.runInContext("footprintMap([{city:'上海市',status:'attended'},{city:'上海',status:'attended'},{city:'杭州',status:'pending'},{city:'未知城市',status:'attended'}])",context);
-assert(html.includes('已点亮 1 座城市'));
+const html=vm.runInContext("footprintMap([{city:'上海市',status:'attended'},{city:'上海',status:'attended'},{city:'嘉兴市',status:'attended'},{city:'杭州',status:'pending'},{city:'未知城市',status:'attended'}])",context);
+assert(html.includes('已点亮 2 座城市'));
 assert(html.includes('上海，2 场现场'));
+assert(html.includes('嘉兴，1 场现场'));
+assert(!html.includes('嘉兴 1 场</span> · 待定位'));
 assert(!html.includes('data-map-city="杭州"'));
 assert(html.includes('未知城市'));
 assert(html.includes('北京市'));
