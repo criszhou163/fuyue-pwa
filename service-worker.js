@@ -1,7 +1,7 @@
-const CACHE = 'fuyue-shell-v4';
+const CACHE = 'fuyue-shell-v5';
 const SHELL = [
   './', './index.html', './mobile.css', './footprint-map.css',
-  './footprint-map.js', './china-provinces.js', './app-v1.js', './pwa.js',
+  './footprint-map.js?v=1.2', './china-provinces.js', './city-data.js?v=1.2', './app-v1.js?v=1.2', './pwa.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png',
   './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/icon-180.png'
 ];

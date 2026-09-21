@@ -16,7 +16,7 @@ let storageWarningShown=false;
 const $=selector=>document.querySelector(selector);
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const attended=()=>data.events.filter(event=>event.status==='attended');
-const cityCount=events=>new Set(events.map(event=>event.city.trim().replace(/市$/,''))).size;
+const cityCount=events=>new Set(events.map(event=>resolveCityName(event.city)||event.city.trim())).size;
 const colors=['#72609688','#567c7966','#99596e77','#715b4988'];
 
 function openDatabase(){return new Promise((resolve,reject)=>{const request=indexedDB.open('fuyue-db',1);request.onupgradeneeded=()=>request.result.createObjectStore('kv');request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});}
@@ -68,9 +68,21 @@ function render(){
 
 function renderDraftMedia(){const holder=$('#mediaDraft');holder.innerHTML=mediaDraft.map(item=>`<figure class="media-item"><img src="${esc(item.dataUrl)}" alt="${item.kind==='ticket'?'票根':'现场照片'}"><button type="button" data-remove-media="${item.id}" aria-label="移除图片">×</button><select data-media-kind="${item.id}" aria-label="图片类型"><option value="photo" ${item.kind==='photo'?'selected':''}>照片</option><option value="ticket" ${item.kind==='ticket'?'selected':''}>票根</option></select></figure>`).join('');}
 function fillArtistChecks(chosen=[]){$('#checks').innerHTML=data.artists.map((artist,index)=>`<label class="check"><input type="checkbox" name="artist" value="${index}" ${chosen.includes(artist)?'checked':''}>${esc(artist)}</label>`).join('');}
+function fillCityOptions(provinceName='',cityName=''){
+  const province=chinaCityData.find(item=>item.name===provinceName);
+  $('#citySelect').innerHTML='<option value="">选择城市</option>'+(province?province.cities.map(city=>`<option value="${esc(city.name)}" ${city.name===cityName?'selected':''}>${esc(city.name)}</option>`).join(''):'');
+  $('#citySelect').disabled=!province;
+}
+function syncCityPicker(value){const record=resolveCityRecord(value);if(!record){$('#provinceSelect').value='';fillCityOptions();return null;}$('#city').value=record.name;$('#provinceSelect').value=record.province;fillCityOptions(record.province,record.name);$('#cityMatch').textContent=`已识别：${record.province} · ${record.name}`;$('#cityMatch').classList.remove('city-unmatched');return record;}
+function checkCityInput(){const record=syncCityPicker($('#city').value);if(!record&&$('#city').value.trim()){$('#cityMatch').textContent='暂未识别该城市，请从下方省份和城市中选择。';$('#cityMatch').classList.add('city-unmatched');}else if(!$('#city').value.trim()){$('#cityMatch').textContent='输入后会自动识别；也可按省份和城市选择。';$('#cityMatch').classList.remove('city-unmatched');}return record;}
+function initCityPicker(){
+  $('#provinceSelect').innerHTML='<option value="">选择省份</option>'+chinaCityData.map(province=>`<option value="${esc(province.name)}">${esc(province.name)}</option>`).join('');
+  $('#citySuggestions').innerHTML=chinaCityRecords.map(city=>`<option value="${esc(city.name)}">${esc(city.province)}</option>`).join('');
+  fillCityOptions();
+}
 function openRecord(id=null){
   const event=id===null?null:data.events.find(item=>item.id===Number(id));$('#recordForm').reset();$('#recordId').value=event?.id||'';$('#recordHeading').textContent=event?'编辑现场记录':'记下一次奔赴';$('#formError').textContent='';$('#ocrStatus').textContent='';$('#deleteFromForm').classList.toggle('hidden',!event);mediaDraft=structuredClone(event?.media||[]);fillArtistChecks(event?.artists||(selected!==null?[data.artists[selected]]:[]));
-  if(event){$('#title').value=event.title;$('#eventType').value=event.type||'演唱会';$('#date').value=event.date;$('#city').value=event.city;$('#venue').value=event.venue;$('#status').value=event.status;$('#notes').value=event.notes||'';}
+  if(event){$('#title').value=event.title;$('#eventType').value=event.type||'演唱会';$('#date').value=event.date;$('#city').value=event.city;$('#venue').value=event.venue;$('#status').value=event.status;$('#notes').value=event.notes||'';checkCityInput();}else{fillCityOptions();$('#cityMatch').textContent='输入后会自动识别；也可按省份和城市选择。';$('#cityMatch').classList.remove('city-unmatched');}
   renderDraftMedia();$('#record').showModal();
 }
 async function fileToCompressedDataURL(file,max=1600,quality=.82){
@@ -85,7 +97,7 @@ function deleteEvent(id){const event=data.events.find(item=>item.id===Number(id)
 function parseOCR(text){
   const clean=text.replace(/\s+/g,' ').trim();const lines=text.split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
   const dateMatch=clean.match(/(20\d{2})[年.\-/]\s*(\d{1,2})[月.\-/]\s*(\d{1,2})日?/);const date=dateMatch?`${dateMatch[1]}-${dateMatch[2].padStart(2,'0')}-${dateMatch[3].padStart(2,'0')}`:'';
-  const city=Object.keys(cityCoordinates).find(name=>clean.includes(name)||clean.includes(name+'市'))||'';
+  const city=findCityInText(clean)?.name||'';
   const venue=lines.find(line=>/(体育馆|体育场|体育中心|演艺中心|文化中心|剧院|音乐厅|奥体|场馆)/.test(line))||'';
   const title=lines.find(line=>/(演唱会|音乐节|见面会|签售会|巡回)/.test(line))||'';
   const type=(title.match(/音乐节|见面会|签售会|演唱会/)||[])[0]||'演唱会';
@@ -94,7 +106,7 @@ function parseOCR(text){
 async function loadTesseract(){if(window.Tesseract)return;await new Promise((resolve,reject)=>{const script=document.createElement('script');script.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';script.onload=resolve;script.onerror=()=>reject(new Error('识别组件加载失败，请检查网络'));document.head.append(script);});}
 async function runOCR(){
   const file=$('#ocrFile').files[0];if(!file)return $('#ocrStatus').textContent='请先选择订单截图。';const button=$('#runOcr');button.disabled=true;
-  try{$('#ocrStatus').textContent='正在加载识别组件…';await loadTesseract();const worker=await Tesseract.createWorker(['chi_sim','eng'],1,{logger:message=>{if(message.status==='recognizing text')$('#ocrStatus').textContent=`正在识别… ${Math.round(message.progress*100)}%`;}});const result=await worker.recognize(file);await worker.terminate();const found=parseOCR(result.data.text);if(found.title)$('#title').value=found.title;if(found.date)$('#date').value=found.date;if(found.city)$('#city').value=found.city;if(found.venue)$('#venue').value=found.venue;if(found.type)$('#eventType').value=found.type;found.artists.forEach(artist=>{const index=data.artists.indexOf(artist);const checkbox=document.querySelector(`#checks input[value="${index}"]`);if(checkbox)checkbox.checked=true;});await addMediaFiles([file],'ticket');$('#ocrStatus').textContent='识别完成。请核对活动、日期、城市和场馆后再保存。';}catch(error){console.error(error);$('#ocrStatus').textContent=`识别失败：${error.message}。你仍可手动填写。`;}finally{button.disabled=false;}
+  try{$('#ocrStatus').textContent='正在加载识别组件…';await loadTesseract();const worker=await Tesseract.createWorker(['chi_sim','eng'],1,{logger:message=>{if(message.status==='recognizing text')$('#ocrStatus').textContent=`正在识别… ${Math.round(message.progress*100)}%`;}});const result=await worker.recognize(file);await worker.terminate();const found=parseOCR(result.data.text);if(found.title)$('#title').value=found.title;if(found.date)$('#date').value=found.date;if(found.city){$('#city').value=found.city;syncCityPicker(found.city);}if(found.venue)$('#venue').value=found.venue;if(found.type)$('#eventType').value=found.type;found.artists.forEach(artist=>{const index=data.artists.indexOf(artist);const checkbox=document.querySelector(`#checks input[value="${index}"]`);if(checkbox)checkbox.checked=true;});await addMediaFiles([file],'ticket');$('#ocrStatus').textContent='识别完成。请核对活动、日期、城市和场馆后再保存。';}catch(error){console.error(error);$('#ocrStatus').textContent=`识别失败：${error.message}。你仍可手动填写。`;}finally{button.disabled=false;}
 }
 
 document.addEventListener('click',event=>{
@@ -113,6 +125,11 @@ document.addEventListener('click',event=>{
 });
 document.addEventListener('change',event=>{if(event.target.dataset.mediaKind){const item=mediaDraft.find(entry=>entry.id===event.target.dataset.mediaKind);if(item)item.kind=event.target.value;}});
 
+$('#city').addEventListener('input',checkCityInput);
+$('#city').addEventListener('blur',checkCityInput);
+$('#provinceSelect').addEventListener('change',event=>{fillCityOptions(event.target.value);$('#city').value='';$('#cityMatch').textContent=event.target.value?'请选择城市。':'输入后会自动识别；也可按省份和城市选择。';});
+$('#citySelect').addEventListener('change',event=>{if(event.target.value){$('#city').value=event.target.value;syncCityPicker(event.target.value);}});
+
 $('#background').onclick=()=>{refreshStorageMeter();$('#settings').showModal();};
 $('#bgFile').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{const background=await fileToCompressedDataURL(file,2000,.82);if(!ensureCapacity(dataUrlBytes(background)-dataUrlBytes(data.settings.background)))return;data.settings.background=background;applySettings();save();}catch(error){alert(error.message);}};
 $('#shade').oninput=event=>{data.settings.shade=Number(event.target.value);applySettings();save();};
@@ -121,7 +138,7 @@ $('#manageStorage').onclick=()=>showCleanup('manage');
 $('#mediaFiles').onchange=event=>addMediaFiles([...event.target.files]);$('#runOcr').onclick=runOCR;
 $('#deleteFromForm').onclick=()=>deleteEvent($('#recordId').value);
 
-$('#recordForm').onsubmit=event=>{event.preventDefault();const id=Number($('#recordId').value)||Date.now();const artists=[...document.querySelectorAll('#checks input:checked')].map(input=>data.artists[Number(input.value)]);if(!artists.length)return $('#formError').textContent='请至少选择一位艺人。';const item={id,artists,title:$('#title').value.trim(),type:$('#eventType').value,date:$('#date').value,city:$('#city').value.trim(),venue:$('#venue').value.trim(),status:$('#status').value,notes:$('#notes').value.trim(),media:mediaDraft};if(!item.title||!item.date||!item.city||!item.venue)return $('#formError').textContent='请完整填写活动、日期、城市和场馆。';if(item.status==='attended'&&item.date>new Date().toLocaleDateString('sv-SE'))return $('#formError').textContent='未来的活动请保存为待赴约。';if(data.events.some(existing=>existing.id!==id&&existing.date===item.date&&existing.title===item.title&&existing.venue===item.venue))return $('#formError').textContent='已有相同活动、日期和场馆的记录。';const index=data.events.findIndex(existing=>existing.id===id);if(index>=0)data.events[index]=item;else data.events.push(item);save();$('#record').close();render();};
+$('#recordForm').onsubmit=event=>{event.preventDefault();const id=Number($('#recordId').value)||Date.now();const artists=[...document.querySelectorAll('#checks input:checked')].map(input=>data.artists[Number(input.value)]);if(!artists.length)return $('#formError').textContent='请至少选择一位艺人。';const cityRecord=resolveCityRecord($('#city').value);if(!cityRecord)return $('#formError').textContent='无法识别该城市，请从省份和城市列表中选择。';const item={id,artists,title:$('#title').value.trim(),type:$('#eventType').value,date:$('#date').value,city:cityRecord.name,venue:$('#venue').value.trim(),status:$('#status').value,notes:$('#notes').value.trim(),media:mediaDraft};if(!item.title||!item.date||!item.city||!item.venue)return $('#formError').textContent='请完整填写活动、日期、城市和场馆。';if(item.status==='attended'&&item.date>new Date().toLocaleDateString('sv-SE'))return $('#formError').textContent='未来的活动请保存为待赴约。';if(data.events.some(existing=>existing.id!==id&&existing.date===item.date&&existing.title===item.title&&existing.venue===item.venue))return $('#formError').textContent='已有相同活动、日期和场馆的记录。';const index=data.events.findIndex(existing=>existing.id===id);if(index>=0)data.events[index]=item;else data.events.push(item);save();$('#record').close();render();};
 $('#artistForm').onsubmit=event=>{event.preventDefault();const name=$('#artistName').value.trim();if(!name)return;if(data.artists.includes(name))return alert('这位艺人已经在列表中。');data.artists.push(name);save();event.target.reset();renderArtistManager();render();};
 
 $('#exportData').onclick=()=>{const blob=new Blob([JSON.stringify(data)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`赴约备份-${new Date().toLocaleDateString('sv-SE')}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);};
@@ -130,4 +147,4 @@ $('#importData').onchange=async event=>{const file=event.target.files[0];if(!fil
 document.querySelectorAll('[data-cleanup-select]').forEach(button=>button.addEventListener('click',()=>{const kind=button.dataset.cleanupSelect;document.querySelectorAll('#cleanupList input').forEach(input=>input.checked=kind==='all'||input.dataset.kind===kind);}));
 $('#cleanupForm').onsubmit=event=>{event.preventDefault();const selected=[...document.querySelectorAll('#cleanupList input:checked')].map(input=>input.value);if(!selected.length)return alert('请先选择需要清理的内容。');if(!confirm(`确定删除所选的 ${selected.length} 项内容吗？文字记录会保留。`))return;for(const key of selected){if(key==='background'){data.settings.background=null;continue;}const [eventId,mediaId]=key.split(':');const record=data.events.find(item=>item.id===Number(eventId));if(record)record.media=(record.media||[]).filter(item=>item.id!==mediaId);}applySettings();save();renderCleanup('manage');render();};
 
-(async()=>{data=await loadData();applySettings();render();const bytes=await refreshStorageMeter();if(bytes>=STORAGE_LIMIT)showCleanup('full');else if(bytes>=STORAGE_WARNING){storageWarningShown=true;showCleanup('warning');}})();
+(async()=>{initCityPicker();data=await loadData();applySettings();render();const bytes=await refreshStorageMeter();if(bytes>=STORAGE_LIMIT)showCleanup('full');else if(bytes>=STORAGE_WARNING){storageWarningShown=true;showCleanup('warning');}})();
