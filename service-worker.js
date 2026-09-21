@@ -1,4 +1,4 @@
-const CACHE = 'fuyue-shell-v2';
+const CACHE = 'fuyue-shell-v3';
 const SHELL = [
   './', './index.html', './mobile.css', './footprint-map.css',
   './footprint-map.js', './china-provinces.js', './app-v1.js', './pwa.js',

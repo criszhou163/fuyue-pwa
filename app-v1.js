@@ -11,6 +11,8 @@ const initialData = {
 };
 
 let data, page='home', selected=null, mediaDraft=[], db, saveTimer;
+const MB=1024*1024, STORAGE_LIMIT=300*MB, STORAGE_WARNING=270*MB;
+let storageWarningShown=false;
 const $=selector=>document.querySelector(selector);
 const esc=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const attended=()=>data.events.filter(event=>event.status==='attended');
@@ -32,8 +34,19 @@ async function loadData(){
   try{const legacy=JSON.parse(localStorage.getItem('fu-yue-v1'));if(legacy)return normalizeData(legacy);}catch{}
   return structuredClone(initialData);
 }
-function save(){clearTimeout(saveTimer);saveTimer=setTimeout(async()=>{try{if(db)await dbPut('appData',data);const light={...data,events:data.events.map(e=>({...e,media:[]})),settings:{...data.settings,background:null}};localStorage.setItem('fu-yue-v1',JSON.stringify(light));}catch(error){console.error(error);alert('保存失败，可能是设备存储空间不足。请先导出备份。');}},120);}
+function save(){clearTimeout(saveTimer);saveTimer=setTimeout(async()=>{try{if(db)await dbPut('appData',data);const light={...data,events:data.events.map(e=>({...e,media:[]})),settings:{...data.settings,background:null}};localStorage.setItem('fu-yue-v1',JSON.stringify(light));refreshStorageMeter();}catch(error){console.error(error);alert('保存失败，可能是设备存储空间不足。请先导出备份。');showCleanup('full');}},120);}
 function applySettings(){const settings=data.settings||{};document.documentElement.style.setProperty('--shade',(settings.shade??60)/100);document.documentElement.style.setProperty('--bg',settings.background?`url("${settings.background}")`:'none');$('#shade').value=settings.shade??60;}
+
+function dataUrlBytes(url){if(!url)return 0;const comma=url.indexOf(',');const body=comma>=0?url.slice(comma+1):url;return Math.max(0,Math.floor(body.length*3/4)-(body.endsWith('==')?2:body.endsWith('=')?1:0));}
+function managedBytes(){let bytes=dataUrlBytes(data.settings?.background);for(const event of data.events)for(const item of event.media||[])bytes+=dataUrlBytes(item.dataUrl);const metadata={...data,events:data.events.map(event=>({...event,media:(event.media||[]).map(item=>({...item,dataUrl:''}))})),settings:{...data.settings,background:null}};return bytes+new Blob([JSON.stringify(metadata)]).size;}
+function formatBytes(bytes){if(bytes<MB)return `${Math.max(.1,bytes/1024).toFixed(1)} KB`;return `${(bytes/MB).toFixed(bytes>=100*MB?0:1)} MB`;}
+function meterState(bytes){return bytes>=STORAGE_LIMIT?'full':bytes>=STORAGE_WARNING?'warning':'';}
+function setMeter(bar,bytes){if(!bar)return;bar.style.width=`${Math.min(100,bytes/STORAGE_LIMIT*100)}%`;bar.className=meterState(bytes);}
+async function refreshStorageMeter(){const bytes=managedBytes();$('#storageUsed').textContent=`已使用 ${formatBytes(bytes)}`;setMeter($('#storageBar'),bytes);try{const estimate=await navigator.storage?.estimate?.();$('#originStorage').textContent=estimate?.usage?`iOS 浏览器报告该网站共使用约 ${formatBytes(estimate.usage)}（含离线缓存）。`:'应用会在新增图片前检查 300 MB 上限。';}catch{$('#originStorage').textContent='应用会在新增图片前检查 300 MB 上限。';}return bytes;}
+function ensureCapacity(extraBytes){const projected=managedBytes()+Math.max(0,extraBytes);if(projected>=STORAGE_LIMIT){showCleanup('full');return false;}if(projected>=STORAGE_WARNING&&!storageWarningShown){storageWarningShown=true;showCleanup('warning');}return true;}
+function cleanupItems(){const items=[];if(data.settings?.background)items.push({key:'background',kind:'background',title:'自定义背景',subtitle:'背景设置',dataUrl:data.settings.background,size:dataUrlBytes(data.settings.background)});for(const event of data.events)for(const item of event.media||[])items.push({key:`${event.id}:${item.id}`,eventId:event.id,mediaId:item.id,kind:item.kind||'photo',title:event.title,subtitle:`${event.date} · ${item.kind==='ticket'?'票根':'现场照片'}`,dataUrl:item.dataUrl,size:dataUrlBytes(item.dataUrl)});return items.sort((a,b)=>b.size-a.size);}
+function renderCleanup(reason='manage'){const bytes=managedBytes();$('#cleanupHeading').textContent=reason==='full'?'本地存储已达到上限':reason==='warning'?'本地存储即将达到上限':'管理存储空间';$('#cleanupMessage').textContent=reason==='full'?'请选择不再需要的照片、票根或背景。清理前不会自动删除任何内容。':reason==='warning'?'已接近 300 MB。你可以现在清理，也可以先关闭并继续使用。':'选择要从此设备删除的内容，文字记录不会被删除。';$('#cleanupUsed').textContent=`已使用 ${formatBytes(bytes)}`;setMeter($('#cleanupBar'),bytes);const items=cleanupItems();$('#cleanupList').innerHTML=items.length?items.map(item=>`<label class="cleanup-item"><input type="checkbox" name="cleanup" value="${esc(item.key)}" data-kind="${esc(item.kind)}"><img src="${esc(item.dataUrl)}" alt=""><span><strong>${esc(item.title)}</strong><span>${esc(item.subtitle)}</span></span><span class="size">${formatBytes(item.size)}</span></label>`).join(''):'<div class="cleanup-empty">没有可清理的图片或背景。</div>';}
+function showCleanup(reason='manage'){renderCleanup(reason);if(!$('#cleanupDialog').open)$('#cleanupDialog').showModal();}
 
 function statusLabel(status){return {attended:'已到场',pending:'待赴约',cancelled:'未计入次数'}[status]||status;}
 function rows(events){
@@ -64,7 +77,7 @@ async function fileToCompressedDataURL(file,max=1600,quality=.82){
   if(!file.type.startsWith('image/'))throw new Error('请选择图片文件');
   const source=URL.createObjectURL(file);try{const image=new Image();image.src=source;await image.decode();const ratio=Math.min(1,max/Math.max(image.naturalWidth,image.naturalHeight));const canvas=document.createElement('canvas');canvas.width=Math.max(1,Math.round(image.naturalWidth*ratio));canvas.height=Math.max(1,Math.round(image.naturalHeight*ratio));canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height);return canvas.toDataURL('image/jpeg',quality);}finally{URL.revokeObjectURL(source);}
 }
-async function addMediaFiles(files,kind='photo'){for(const file of files){if(mediaDraft.length>=9)break;try{mediaDraft.push({id:crypto.randomUUID?.()||String(Date.now()+Math.random()),name:file.name,kind,dataUrl:await fileToCompressedDataURL(file)});}catch(error){alert(error.message);}}renderDraftMedia();}
+async function addMediaFiles(files,kind='photo'){for(const file of files){if(mediaDraft.length>=9)break;try{const dataUrl=await fileToCompressedDataURL(file);const draftBytes=mediaDraft.reduce((sum,item)=>sum+dataUrlBytes(item.dataUrl),0);const savedDraftBytes=Number($('#recordId').value)?(data.events.find(event=>event.id===Number($('#recordId').value))?.media||[]).reduce((sum,item)=>sum+dataUrlBytes(item.dataUrl),0):0;if(!ensureCapacity(dataUrlBytes(dataUrl)+draftBytes-savedDraftBytes))break;mediaDraft.push({id:crypto.randomUUID?.()||String(Date.now()+Math.random()),name:file.name,kind,dataUrl});}catch(error){alert(error.message);}}renderDraftMedia();}
 
 function renderArtistManager(){const holder=$('#artistManageList');holder.innerHTML=data.artists.map((artist,index)=>`<div class="manage-row"><span>${esc(artist)}</span><div><button class="text-action" data-rename-artist="${index}">重命名</button><button class="text-action danger" data-delete-artist="${index}">删除</button></div></div>`).join('');}
 function deleteEvent(id){const event=data.events.find(item=>item.id===Number(id));if(!event||!confirm(`确定删除“${event.title}”吗？此操作无法撤销。`))return;data.events=data.events.filter(item=>item.id!==event.id);save();$('#record').close();render();}
@@ -100,10 +113,11 @@ document.addEventListener('click',event=>{
 });
 document.addEventListener('change',event=>{if(event.target.dataset.mediaKind){const item=mediaDraft.find(entry=>entry.id===event.target.dataset.mediaKind);if(item)item.kind=event.target.value;}});
 
-$('#background').onclick=()=>{$('#settings').showModal();};
-$('#bgFile').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{data.settings.background=await fileToCompressedDataURL(file,2000,.82);applySettings();save();}catch(error){alert(error.message);}};
+$('#background').onclick=()=>{refreshStorageMeter();$('#settings').showModal();};
+$('#bgFile').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{const background=await fileToCompressedDataURL(file,2000,.82);if(!ensureCapacity(dataUrlBytes(background)-dataUrlBytes(data.settings.background)))return;data.settings.background=background;applySettings();save();}catch(error){alert(error.message);}};
 $('#shade').oninput=event=>{data.settings.shade=Number(event.target.value);applySettings();save();};
 $('#resetBg').onclick=()=>{data.settings.background=null;data.settings.shade=60;$('#bgFile').value='';applySettings();save();};
+$('#manageStorage').onclick=()=>showCleanup('manage');
 $('#mediaFiles').onchange=event=>addMediaFiles([...event.target.files]);$('#runOcr').onclick=runOCR;
 $('#deleteFromForm').onclick=()=>deleteEvent($('#recordId').value);
 
@@ -111,6 +125,9 @@ $('#recordForm').onsubmit=event=>{event.preventDefault();const id=Number($('#rec
 $('#artistForm').onsubmit=event=>{event.preventDefault();const name=$('#artistName').value.trim();if(!name)return;if(data.artists.includes(name))return alert('这位艺人已经在列表中。');data.artists.push(name);save();event.target.reset();renderArtistManager();render();};
 
 $('#exportData').onclick=()=>{const blob=new Blob([JSON.stringify(data)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download=`赴约备份-${new Date().toLocaleDateString('sv-SE')}.json`;link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);};
-$('#importData').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{const incoming=normalizeData(JSON.parse(await file.text()));if(!confirm(`将用备份中的 ${incoming.events.length} 条记录替换当前数据，确定继续吗？`))return;data=incoming;await dbPut('appData',data);applySettings();render();$('#settings').close();}catch(error){alert('无法导入：备份文件格式不正确。');}finally{event.target.value='';}};
+$('#importData').onchange=async event=>{const file=event.target.files[0];if(!file)return;try{const incoming=normalizeData(JSON.parse(await file.text()));if(!confirm(`将用备份中的 ${incoming.events.length} 条记录替换当前数据，确定继续吗？`))return;data=incoming;await dbPut('appData',data);applySettings();render();$('#settings').close();const bytes=await refreshStorageMeter();if(bytes>=STORAGE_LIMIT)showCleanup('full');else if(bytes>=STORAGE_WARNING)showCleanup('warning');}catch(error){alert('无法导入：备份文件格式不正确。');}finally{event.target.value='';}};
 
-(async()=>{data=await loadData();applySettings();render();})();
+document.querySelectorAll('[data-cleanup-select]').forEach(button=>button.addEventListener('click',()=>{const kind=button.dataset.cleanupSelect;document.querySelectorAll('#cleanupList input').forEach(input=>input.checked=kind==='all'||input.dataset.kind===kind);}));
+$('#cleanupForm').onsubmit=event=>{event.preventDefault();const selected=[...document.querySelectorAll('#cleanupList input:checked')].map(input=>input.value);if(!selected.length)return alert('请先选择需要清理的内容。');if(!confirm(`确定删除所选的 ${selected.length} 项内容吗？文字记录会保留。`))return;for(const key of selected){if(key==='background'){data.settings.background=null;continue;}const [eventId,mediaId]=key.split(':');const record=data.events.find(item=>item.id===Number(eventId));if(record)record.media=(record.media||[]).filter(item=>item.id!==mediaId);}applySettings();save();renderCleanup('manage');render();};
+
+(async()=>{data=await loadData();applySettings();render();const bytes=await refreshStorageMeter();if(bytes>=STORAGE_LIMIT)showCleanup('full');else if(bytes>=STORAGE_WARNING){storageWarningShown=true;showCleanup('warning');}})();
