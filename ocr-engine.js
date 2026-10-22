@@ -73,18 +73,10 @@
         finally{canvas.width=canvas.height=1;}
       }
       check();
-      const dated=outputs.map((o,i)=>({...o,index:i,dates:FuyueOCR.datesFrom(o.text)})).filter(o=>o.dates.some(d=>d.date));
-      dated.sort((a,b)=>(b.index>=3?15:0)+(b.confidence||0)-(a.index>=3?15:0)-(a.confidence||0));
-      const multiCity=FuyueOCR.extract(outputs.map(o=>o.text).join('\n'),{cities}).warnings.some(w=>w.includes('多个城市'));
-      const chosenDates=multiCity?null:dated[0];const warnings=[];
-      if(chosenDates){
-        const key=chosenDates.dates.map(d=>d.date||d.label).sort().join(',');
-        if(dated.some(o=>o.dates.map(d=>d.date||d.label).sort().join(',')!==key))warnings.push('不同轮次的日期结果不一致，已优先采用较清晰的完整日期，请逐项核对。');
-      }
-      // Focused passes provide body text first; full-page OCR supplies large titles.
-      const ordered=poster?[...outputs.slice(3),outputs[2],outputs[1],outputs[0]]:outputs;
-      const seen=new Set(),lines=[];for(const output of ordered)for(const line of output.text.split(/\r?\n/)){const clean=FuyueOCR.tidy(line);if(chosenDates&&output!==outputs[chosenDates.index]&&FuyueOCR.datesFrom(clean).length)continue;if(clean&&!seen.has(clean)){seen.add(clean);lines.push(clean);}}
-      return {text:lines.join('\n'),passes:outputs,warnings};
+      // This merged text is only for inspection/manual correction. Automatic
+      // extraction uses the separate passes, retaining contradictory evidence.
+      const seen=new Set(),lines=[];for(const output of outputs)for(const line of output.text.split(/\r?\n/)){const clean=FuyueOCR.tidy(line);if(clean&&!seen.has(clean)){seen.add(clean);lines.push(clean);}}
+      return {text:lines.join('\n'),passes:outputs,warnings:[]};
     }finally{URL.revokeObjectURL(url);if(worker)await worker.terminate().catch(()=>{});onWorker(null);}
   }
   root.FuyueImageOCR={recognize};

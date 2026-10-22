@@ -1,26 +1,28 @@
 /* Local image recognition and explicit review. */
-let ocrGeneration=0,ocrPreviewURL='',ocrFound=null,ocrBatchDates=[],ocrImageWarnings=[];
-function resetOCR(){cancelOCR();ocrImageWarnings=[];ocrBatchDates=[];ocrFound=null;$('#ocrFile').value='';$('#ocrHint').value='';$('#ocrAttach').checked=false;$('#ocrEmptyOnly').checked=true;$('#ocrReview').hidden=true;$('#ocrPreview').hidden=true;$('#ocrStatus').textContent='';$('#batchNotice').textContent='';$('#runOcr').disabled=false;if(ocrPreviewURL)URL.revokeObjectURL(ocrPreviewURL);}
+let ocrGeneration=0,ocrPreviewURL='',ocrFound=null,ocrBatchDates=[],ocrImageWarnings=[],ocrImageResult=null;
+function resetOCR(){cancelOCR();ocrImageResult=null;ocrImageWarnings=[];ocrBatchDates=[];ocrFound=null;$('#ocrFile').value='';$('#ocrHint').value='';$('#ocrAttach').checked=false;$('#ocrEmptyOnly').checked=true;$('#ocrReview').hidden=true;$('#ocrPreview').hidden=true;$('#ocrStatus').textContent='';$('#batchNotice').textContent='';$('#runOcr').disabled=false;if(ocrPreviewURL)URL.revokeObjectURL(ocrPreviewURL);}
 function reviewOCR(){
-  ocrFound=FuyueOCR.extract($('#ocrText').value,{hint:$('#ocrHint').value,kind:$('#ocrKind').value,artists:data.artists,cities:chinaCityRecords});
+  const options={hint:$('#ocrHint').value,kind:$('#ocrKind').value,artists:data.artists,cities:chinaCityRecords};
+  ocrFound=ocrImageResult&&$('#ocrText').value===ocrImageResult.text?FuyueOCR.extractPasses(ocrImageResult.passes,options):FuyueOCR.extract($('#ocrText').value,options);
   const f=ocrFound;f.warnings=[...ocrImageWarnings,...f.warnings];$('#ocrTitle').value=f.title;$('#ocrCity').value=f.city;$('#ocrVenue').value=f.venue;$('#ocrVenues').innerHTML=f.venues.map(v=>`<option value="${esc(v)}">`).join('');
-  $('#ocrDates').innerHTML=f.dates.map((d,i)=>`<label class="ocr-date"><input type="checkbox" data-ocr-date="${i}" ${f.selected.includes(d.date)&&d.date?'checked':''}><span>${esc(d.label)}</span><input type="date" aria-label="确认完整日期" value="${d.date}"></label>`).join('')||'<p class="note">未找到日期，可在下方手动补充。</p>';
+  $('#ocrTitles').innerHTML=(f.titleCandidates||[]).map(t=>`<option value="${esc(t)}">`).join('');
+  $('#ocrDates').innerHTML=f.dates.map((d,i)=>`<label class="ocr-date"><input type="checkbox" data-ocr-date="${i}" ${f.selected.includes(d.date)&&d.date?'checked':''}><span>${esc(d.label)}${d.sources?`<small class="note" style="display:block">${esc(d.sources.join('、'))}</small>`:''}</span><input type="date" aria-label="确认完整日期" value="${d.date}"></label>`).join('')||'<p class="note">未找到日期，可在下方手动补充。</p>';
   $('#ocrManualDate').value='';$('#ocrWarnings').textContent=f.warnings.join(' ');$('#ocrReview').hidden=false;
 }
 let activeOCRWorker=null;
 function cancelOCR(){ocrGeneration++;if(activeOCRWorker){activeOCRWorker.terminate().catch(()=>{});activeOCRWorker=null;}$('#runOcr').disabled=false;$('#ocrCancel').hidden=true;}
 async function runOCR(){
-  const file=$('#ocrFile').files[0];if(!file)return $('#ocrStatus').textContent='请先选择订单截图或海报。';cancelOCR();const generation=ocrGeneration;$('#runOcr').disabled=true;$('#ocrCancel').hidden=false;$('#ocrReview').hidden=true;
+  const file=$('#ocrFile').files[0];if(!file)return $('#ocrStatus').textContent='请先选择订单截图或海报。';cancelOCR();ocrImageResult=null;ocrImageWarnings=[];const generation=ocrGeneration;$('#runOcr').disabled=true;$('#ocrCancel').hidden=false;$('#ocrReview').hidden=true;
   try{
     $('#ocrStatus').textContent='准备识别，首次加载模型需要联网…';
     const result=await FuyueImageOCR.recognize(file,{language:$('#ocrLanguage').value,kind:$('#ocrKind').value,enhance:$('#ocrEnhance').checked,cities:chinaCityRecords,cancelled:()=>generation!==ocrGeneration,onWorker:w=>{if(generation===ocrGeneration)activeOCRWorker=w;},onProgress:message=>{if(generation===ocrGeneration)$('#ocrStatus').textContent=message;}});
-    if(generation!==ocrGeneration)return;ocrImageWarnings=result.warnings||[];$('#ocrText').value=result.text;reviewOCR();$('#ocrStatus').textContent='识别完成。已合并分区识别结果，请对照原图核对标题、日期与场馆。';
+    if(generation!==ocrGeneration)return;ocrImageResult=result;ocrImageWarnings=result.warnings||[];$('#ocrText').value=result.text;reviewOCR();$('#ocrStatus').textContent='识别结束，以下为待核对候选。名称有明显异常时留空；日期有分歧时不自动勾选。';
   }catch(error){if(generation===ocrGeneration)$('#ocrStatus').textContent='识别失败：'+error.message+'。仍可手动填写。';}
   finally{if(generation===ocrGeneration){$('#runOcr').disabled=false;$('#ocrCancel').hidden=true;}}
 }
 function initOCR(){
   $('#runOcr').onclick=runOCR;$('#ocrCancel').onclick=()=>{cancelOCR();$('#ocrStatus').textContent='已取消识别。';};
-  $('#ocrFile').onchange=()=>{cancelOCR();ocrImageWarnings=[];$('#runOcr').disabled=false;$('#ocrReview').hidden=true;if(ocrPreviewURL)URL.revokeObjectURL(ocrPreviewURL);const file=$('#ocrFile').files[0];$('#ocrPreview').hidden=!file;if(file){ocrPreviewURL=URL.createObjectURL(file);$('#ocrPreview').src=ocrPreviewURL;}$('#ocrStatus').textContent='';};
+  $('#ocrFile').onchange=()=>{cancelOCR();ocrImageResult=null;ocrImageWarnings=[];$('#runOcr').disabled=false;$('#ocrReview').hidden=true;if(ocrPreviewURL)URL.revokeObjectURL(ocrPreviewURL);const file=$('#ocrFile').files[0];$('#ocrPreview').hidden=!file;if(file){ocrPreviewURL=URL.createObjectURL(file);$('#ocrPreview').src=ocrPreviewURL;}$('#ocrStatus').textContent='';};
   $('#reparseOcr').onclick=reviewOCR;
   $('#applyOcr').onclick=async()=>{
     const dates=[...new Set([...document.querySelectorAll('#ocrDates .ocr-date')].filter(row=>row.querySelector('[type=checkbox]').checked).map(row=>row.querySelector('[type=date]').value).concat($('#ocrManualDate').value||[]))];

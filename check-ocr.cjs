@@ -1,4 +1,4 @@
-const assert=require('node:assert/strict');const {extract,datesFrom}=require('./ocr-parser.js');
+const assert=require('node:assert/strict');const {extract,extractPasses,datesFrom}=require('./ocr-parser.js');
 const options={artists:['周笔畅','容祖儿','陈奕迅'],cities:[{name:'杭州市'},{name:'嘉兴市'},{name:'澳门特别行政区'}]};
 let count=0;function test(name,fn){fn();count++;console.log('PASS',name);}
 test('订单优先演出时间、场馆标签下一行、合并标题',()=>{const f=extract('周笔畅\n2026巡回演唱会\n杭州站\n下单时间：2026-09-01\n演出时间：2026-10-29 19:30\n场馆\n杭州奥体中心体育馆',options);assert.equal(f.title,'周笔畅 2026巡回演唱会杭州站');assert.deepEqual(f.selected,['2026-10-29']);assert.equal(f.venue,'杭州奥体中心体育馆');assert.equal(f.city,'杭州市');});
@@ -23,5 +23,23 @@ test('不能从未知场馆猜城市',()=>assert.equal(extract('SOMEWHERE STADIU
 test('啟德體藝館不匹配为主场馆',()=>assert.equal(extract('啟德體藝館\n18 JAN 2027',{...options,cities:[{name:'香港特别行政区'}]}).city,''));
 test('原图真实OCR输出的空格和点号日期分隔',()=>assert.deepEqual(datesFrom('18 22.23 JAN 2027').map(d=>d.date),['2027-01-18','2027-01-22','2027-01-23']));
 test('原图真实OCR输出的分散标题与英文场馆',()=>{const f=extract('AURA\nTOUR JOEY YUNG\n容祖儿演唱会\nKAI TAK STADIUM 局德主场馆\n18 22.23 JAN 2027',{...options,cities:[{name:'香港特别行政区'}],hint:'参加22号场'});assert.equal(f.title,'AURA TOUR 容祖儿演唱会');assert.equal(f.venue,'启德主场馆');assert.deepEqual(f.selected,['2027-01-22']);});
+test('结果截图中的异常括号名称不自动填入',()=>{const f=extract('La车]AURA 容祖儿演唱会-香港站',options);assert.equal(f.title,'');assert(f.warnings.some(w=>w.includes('异常字符')));});
+test('合法括号及中英文混排名称保留',()=>assert.equal(extract('AURA TOUR 容祖儿演唱会（香港站）',options).title,'AURA TOUR 容祖儿演唱会(香港站)'));
+test('不从价格行提取日期，也不跨价格行拼接英文日列表',()=>assert.deepEqual(datesFrom('HK$ 7.01\n18 JAN 2027').map(d=>d.date),['2027-01-18']));
+test('日期与票价同一行保留日期',()=>assert.deepEqual(datesFrom('18,22,23 JAN 2027 7:30PM HK$1680 /1280').map(d=>d.date),['2027-01-18','2027-01-22','2027-01-23']));
+test('超长日数字、残缺年月、价格数字不能截取成有效日期',()=>{for(const text of ['2027/01/180','2027/01','2027-01','2027年1月180日','1680/980/680'])assert.deepEqual(datesFrom(text),[],text);});
+test('英文列表中的点号不能再生成月日',()=>assert.deepEqual(datesFrom('7.01 JAN 2027').map(d=>d.date),['2027-01-07','2027-01-01']));
+test('付款年份不能补全缺年场次',()=>{const f=extract('付款时间：2026-10-01\n18 JAN',options);assert.equal(f.dates[0].date,'');assert.deepEqual(f.selected,[]);});
+test('高置信度轮次也不能覆盖冲突的日期',()=>{const f=extractPasses([{text:'容祖儿演唱会\n1 JUL 2027',pass:'整图',confidence:99},{text:'容祖儿演唱会\n18,22,23 JAN 2027',pass:'日期行',confidence:40}],{...options,hint:'参加18号场'});assert(f.dateConflict);assert.deepEqual(f.selected,[]);assert.equal(f.dates.length,4);assert(f.dates.every(d=>d.sources.length));assert(f.warnings.some(w=>w.includes('不一致')));});
+test('多轮一致才按备注自动选择',()=>{const f=extractPasses([{text:'AURA TOUR 容祖儿演唱会\n18,22,23 JAN 2027'},{text:'容祖儿演唱会\n18 22.23 JAN 2027'}],{...options,hint:'参加22号场'});assert.equal(f.title,'AURA TOUR 容祖儿演唱会');assert.equal(f.dateConflict,false);assert.deepEqual(f.selected,['2027-01-22']);assert.equal(f.dates.length,3);});
+test('只识别到部分日期也需核对，不能忽略可能缺失的场次',()=>{const f=extractPasses([{text:'18,22,23 JAN 2027'},{text:'18,23 JAN 2027'}],{...options,hint:'参加18号场'});assert(f.dateConflict);assert.deepEqual(f.selected,[]);});
+test('多轮标题有不同主题时留空并保留候选',()=>{const f=extractPasses([{text:'AURA TOUR 容祖儿演唱会'},{text:'AURE TOUR 容祖儿演唱会'}],options);assert.equal(f.title,'');assert.equal(f.titleCandidates.length,2);});
+test('异常标题不污染另一轮完整标题',()=>{const f=extractPasses([{text:'La车]AURA 容祖儿演唱会-香港站'},{text:'AURA TOUR 容祖儿演唱会'}],options);assert.equal(f.title,'AURA TOUR 容祖儿演唱会');assert.equal(f.titleCandidates.length,1);});
+test('不同轮次不能拼成英文日期',()=>{const f=extractPasses([{text:'18,22,23'},{text:'JAN 2027'}],options);assert.deepEqual(f.dates,[]);});
+test('不同轮次不能拼接成新的活动名称',()=>{const f=extractPasses([{text:'AURA'},{text:'TOUR\n容祖儿演唱会'}],options);assert(!f.title.includes('AURA'));});
+test('缺年候选与同月日完整候选去重',()=>{const f=extractPasses([{text:'18 JAN'},{text:'18 JAN 2027'}],options);assert.equal(f.dates.length,1);assert.deepEqual(f.selected,['2027-01-18']);});
+test('未确认的其他日期仍保留且不默认选择单场',()=>{const f=extractPasses([{text:'18 JAN 2027'},{text:'22 JAN'}],options);assert.equal(f.dates.length,2);assert.deepEqual(f.selected,[]);});
+test('订单多轮仅比较演出日期，不纳入付款日期',()=>{const text='陈奕迅演唱会\n付款时间：2026-10-01\n演出时间：2026-10-29';const f=extractPasses([{text},{text:text+'\n场馆：杭州奥体中心体育馆'}],{...options,kind:'order'});assert.equal(f.dateConflict,false);assert.deepEqual(f.selected,['2026-10-29']);});
+test('多站分区不能把其他城市日期分配给备注选择的城市',()=>{const f=extractPasses([{text:'杭州站\n2026年10月28日'},{text:'嘉兴站\n2026年11月29日'},{text:'2026年10月28日'}],{...options,hint:'嘉兴站'});assert.equal(f.city,'嘉兴市');assert.deepEqual(f.dates.map(d=>d.date),['2026-11-29']);});
 console.log(`${count} OCR extraction checks passed`);
 

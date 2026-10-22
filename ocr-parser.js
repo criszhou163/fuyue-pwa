@@ -9,9 +9,21 @@
   // Source: https://www.kaitaksportspark.com.hk/venues-spaces/4
   const knownVenues=[{name:'启德主场馆',city:'香港特别行政区',aliases:[/\bKAI[\s"'“”‘’]*TAK[\s"'“”‘’]*STADIUM\b/i,/[启啟]德主[场場][馆館]/]}];
   const junk=/订单号|订单编号|付款|支付|下单|创建时间|开票|开售|退款|退票|须知|指南|客服|配送|收货|票价|票档|座位|数量|合计|查看场馆/;
+  const price=/HK\s*\$|RMB|CNY|USD|[¥￥$]|票价|票档/i;
+  function dateLine(line){
+    if(junk.test(line))return '';
+    // Retain an earlier date on a mixed date/price line, but never parse prices.
+    const at=line.search(price);return at<0?line:line.slice(0,at);
+  }
+  function suspiciousTitle(title){
+    if(/[\uFFFD\u0000-\u001f]|[|\\^_=]{2,}/.test(title)||title.length>80)return true;
+    const pairs={'(':')','[':']','{':'}','《':'》','「':'」','『':'』','【':'】'},stack=[];
+    for(const c of title){if(pairs[c])stack.push(pairs[c]);else if(Object.values(pairs).includes(c)&&stack.pop()!==c)return true;}
+    return stack.length>0;
+  }
   function datesFrom(text){
-    const lines=String(text).normalize('NFKC').split(/\r?\n/).map(labelText).map(l=>l.replace(/(\d)\s+(?=[年月日号./-])/g,'$1').replace(/([年月./-])\s+(?=\d)/g,'$1'));
-    const years=[...new Set([...String(text).matchAll(/\b(20\d{2})\b/g)].map(m=>+m[1]))];
+    const lines=String(text).normalize('NFKC').split(/\r?\n/).map(labelText).map(dateLine).map(l=>l.replace(/(\d)\s+(?=[年月日号./-])/g,'$1').replace(/([年月./-])\s+(?=\d)/g,'$1'));
+    const years=[...new Set([...lines.join('\n').matchAll(/\b(20\d{2})\b/g)].map(m=>+m[1]))];
     let year=years.length===1?years[0]:null;
     const found=[];
     const months='JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC'.split(' ');
@@ -24,8 +36,10 @@
     lines.forEach((line,i)=>{
       if(junk.test(line))return;
       const localYear=line.match(/(20\d{2})[年./-]/);const y=localYear?+localYear[1]:year;
-      const re=/(?:(20\d{2})[年./-]\s*)?(\d{1,2})[月./-]\s*(\d{1,2})(?:日|号)?/g;
+      const re=/(?<![\d./-])(?:(20\d{2})[年./-]\s*)?(\d{1,2})[月./-]\s*(\d{1,2})(?!\d)(?:日|号)?(?![./]\d)/g;
       for(const m of line.matchAll(re)){
+        // Dots inside an English day list are separators, not a second month/day.
+        if(new RegExp(`\\b(?:${monthPattern})\\b`,'i').test(line))continue;
         const yy=m[1]?+m[1]:y,mm=+m[2],dd=+m[3];
         const add=d=>{if(mm<1||mm>12||d<1||d>31)return;const test=new Date(Date.UTC(yy||2000,mm-1,d));if(test.getUTCMonth()!==mm-1)return;const date=yy?`${yy}-${String(mm).padStart(2,'0')}-${String(d).padStart(2,'0')}`:'';found.push({date,month:mm,day:d,label:date||`${mm}月${d}日（年份待确认）`,line:i});};
         add(dd);
@@ -62,7 +76,7 @@
       if(datesFrom(specific.join('\n')).length)dateText=specific.join('\n');
     }
     // A missing year is never replaced with the current year.
-    const commonYears=[...new Set([...lines.filter(l=>!junk.test(l)).join(' ').matchAll(/\b20\d{2}\b/g)].map(m=>m[0]))];
+    const commonYears=[...new Set([...lines.map(dateLine).join(' ').matchAll(/\b20\d{2}\b/g)].map(m=>m[0]))];
     if(!/20\d{2}/.test(dateText)&&commonYears.length===1)dateText=commonYears[0]+'\n'+dateText;
     let dates=datesFrom(dateText);let selected=dates.length===1&&dates[0].date?[dates[0].date]:[];
     const h=labelText(hint),dayHint=[...h.matchAll(/(?:参加|选|看)?\s*(\d{1,2})(?:日|号)/g)].map(m=>+m[1]);
@@ -89,6 +103,7 @@
     if(!theme){const index=rawLines.findIndex(l=>/^TOUR\s+/i.test(l));const prev=rawLines[index-1]||'';if(index>0&&/^[A-Z][A-Z0-9 '\-]{1,35}$/.test(prev)&&!venueWords.test(prev))theme=prev+' TOUR';}
     if(theme&&!title.toUpperCase().includes(theme.toUpperCase()))title=tidy(theme+' '+title);
     if(title&&artistFound.length===1&&!labelText(title).includes(labelText(artistFound[0])))title=tidy(artistFound[0]+' '+title);
+    if(suspiciousTitle(title)){title='';warnings.push('活动名称含异常字符或不成对的括号，未自动填写；请对照原图填写，可展开查看识别文字。');}
     const venueCandidates=[];
     scoped.forEach((l,i)=>{
       if(junk.test(l))return;
@@ -103,6 +118,39 @@
     if(!title)warnings.push('未找到完整活动名称，请手动填写。');
     return {title,city,dates,selected,venues,venue:venues.length===1?venues[0]:'',type:(labelText(title).match(/音乐节|见面会|签售会|演唱会/)||[])[0]||'演唱会',artists:artistFound,warnings,kind:mode};
   }
-  root.FuyueOCR={extract,tidy,datesFrom};
+  function extractPasses(passes,options={}){
+    const active=passes.filter(p=>tidy(p.text));
+    const results=active.map(p=>extract(p.text,options));
+    const merged=extract(active.map(p=>p.text).join('\n'),options);
+    const cityIn=(text,name)=>[name,name.replace(/特别行政区$|市$/,'')].some(n=>n.length>=2&&labelText(text).includes(labelText(n)));
+    const multipleCities=(options.cities||[]).filter(c=>active.some(p=>cityIn(p.text,c.name))).length>1;
+    // A crop without a station label cannot assign its dates to the chosen city
+    // on a multi-station poster. Keep the raw text available for manual review.
+    if(multipleCities&&merged.city)results.forEach((r,i)=>{if(!cityIn(active[i].text,merged.city)){r.dates=[];r.selected=[];}});
+    // Parse each crop independently. Adjacent fragments from different OCR passes
+    // must not become a new title or date merely because they were concatenated.
+    const titles=[...new Set(results.map(r=>r.title).filter(Boolean))];
+    const key=s=>labelText(s).toUpperCase().replace(/[\s\p{P}]/gu,'');
+    const fullest=titles.filter(t=>titles.every(other=>key(t).includes(key(other))));
+    merged.title=fullest.sort((a,b)=>b.length-a.length)[0]||'';
+    merged.type=(labelText(merged.title).match(/音乐节|见面会|签售会|演唱会/)||[])[0]||'演唱会';
+    merged.titleCandidates=titles;
+    merged.warnings=merged.warnings.filter(w=>!w.includes('活动名称')&&!w.includes('补充说明')&&!w.includes('演出日期')&&!w.includes('缺少年份'));
+    if(!merged.title)merged.warnings.push(titles.length?'活动名称有不同读法，未自动填写。请对照原图填写或选择候选。':'未找到可靠活动名称，疑似乱码未自动填写，请对照原图补充。');
+    const byDate=new Map();
+    results.forEach((r,i)=>r.dates.forEach(d=>{const source=`第${i+1}轮·${active[i].pass||'文字识别'}`;const old=byDate.get(d.label);if(old)old.sources.push(source);else byDate.set(d.label,{...d,sources:[source]});}));
+    merged.dates=[...byDate.values()].filter(d=>d.date||![...byDate.values()].some(other=>other.date&&other.month===d.month&&other.day===d.day));
+    const signatures=new Set(results.map(r=>r.dates.filter(d=>d.date).map(d=>d.date).sort().join(',')).filter(Boolean));
+    merged.dateConflict=signatures.size>1;
+    merged.selected=merged.dateConflict?[]:[...new Set(results.flatMap(r=>r.selected))];
+    if(!options.hint&&merged.dates.length>1)merged.selected=[];
+    if(multipleCities&&!merged.city)merged.selected=[];
+    if(merged.dateConflict)merged.warnings.push('不同识别轮次的日期不一致：已保留候选并取消自动勾选。补充说明也不会替代核对，请对照原图选择或修改。');
+    else if(options.hint&&merged.dates.length&&!merged.selected.length)merged.warnings.push('补充说明未能确定唯一场次，请核对候选日期。');
+    if(!merged.dates.length)merged.warnings.push('未找到可靠的演出日期，请手动填写。');
+    if(merged.dates.some(d=>!d.date))merged.warnings.push('图片日期缺少年份，请填写完整日期。');
+    return merged;
+  }
+  root.FuyueOCR={extract,extractPasses,tidy,datesFrom};
   if(typeof module!=='undefined')module.exports=root.FuyueOCR;
 })(typeof globalThis==='undefined'?window:globalThis);
